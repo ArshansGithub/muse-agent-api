@@ -15,3 +15,15 @@ dispatcher.inflight
 dispatcher.lock/
 queue.events
 __pycache__/
+dispatcher.child_id
+dispatcher.child_mine
+dispatcher.dispatch_count
+dispatcher.spawn_notes
+dispatcher.term_started
+dispatcher.term_complete
+dispatcher.shutdown
+supervisor.lock/
+supervisor.started
+SUPERVISOR.md
+
+dispatcher.rotation_deferred_until
