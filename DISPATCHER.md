@@ -36,6 +36,10 @@ Multiple dispatchers racing one queue caused silent request loss (learned
   - Race on simultaneous start: if the mkdir failed AND the scanlog is also
     stale/missing, sleep 15s and re-check — if the scanlog is fresh now,
     exit; otherwise steal as above.
+- The lock DIRECTORY is the only signal that matters. The scanlog may be
+  written by pre-lock dispatchers that do not hold the lock — never infer
+  "someone holds the role" from a fresh scanlog alone. No lock dir means no
+  holder: mkdir succeeds, the role is yours, full stop.
 
 ## The one rule that matters most
 
