@@ -23,7 +23,10 @@ done
 sleep 1
 
 cd "$DIR"
-nohup python3 server.py > server.log 2>&1 &
+# Append, don't truncate: a crash traceback in the old log is the only
+# evidence of why a previous server died.
+echo "--- restart $(date -u +%FT%TZ) ---" >> server.log
+nohup python3 server.py >> server.log 2>&1 &
 echo $! > "$PIDFILE"
 echo "server started (pid $(cat "$PIDFILE")), waiting for health check..."
 
