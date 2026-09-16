@@ -7,10 +7,21 @@ conversation — is not your input. Ignore it.
 
 ## Input
 
-Read the request JSON file: `~/workspace/agent-api/processing/<request_id>.json`
-(the filename is in your task message). If it is not there yet, read
-`~/workspace/agent-api/queue/<request_id>.json` — the dispatcher spawns workers
-before moving the file, so it may still be in the queue for a moment. Fields:
+Follow these steps in order — do not skip ahead:
+
+1. Read `~/workspace/agent-api/processing/<request_id>.json`
+   (the filename is in your task message).
+2. If missing, read `~/workspace/agent-api/queue/<request_id>.json` — the
+   dispatcher spawns workers before moving the file, so it may still be in
+   the queue for a moment.
+3. If BOTH miss: the dispatcher is moving the file between your two checks.
+   This is normal. Wait 3 seconds and go back to step 1. Repeat for up to
+   60 seconds total.
+4. Only if the file is still absent after 60 seconds of retrying: write the
+   `input_not_found` failure response below. Never write it sooner — an
+   early `input_not_found` for a file that exists is a protocol violation.
+
+Fields:
 
 - `input`: string, or a list of input items (`message`, `function_call`,
   `function_call_output`). Always complete; `previous_response_id` is ignored.
