@@ -29,6 +29,20 @@ for d in (QUEUE, RESP):
     os.makedirs(d, exist_ok=True)
 
 
+def _load_token():
+    tok = os.environ.get("AGENT_API_TOKEN")
+    if tok and tok.strip():
+        return tok.strip()
+    p = os.path.join(BASE, ".token")
+    if os.path.exists(p):
+        with open(p) as f:
+            return f.read().strip()
+    return None
+
+
+API_TOKEN = _load_token()
+
+
 def _err(message, code="server_error", status=500):
     return status, {"error": {"message": message, "type": code, "param": None, "code": code}}
 
@@ -48,11 +62,27 @@ class Handler(BaseHTTPRequestHandler):
     def _send_json(self, code, obj):
         self._send(code, json.dumps(obj))
 
+    def _authorized(self):
+        if not API_TOKEN:
+            return False
+        return self.headers.get("Authorization", "") == "Bearer " + API_TOKEN
+
+    def _require_auth(self):
+        if not self._authorized():
+            self._send_json(401, {"error": {
+                "message": "invalid or missing API key",
+                "type": "invalid_request_error", "param": None,
+                "code": "invalid_api_key"}})
+            return False
+        return True
+
     def do_GET(self):
         path = self.path.split("?")[0]
         if path == "/health":
             self._send_json(200, {"ok": True})
         elif path == "/v1/models":
+            if not self._require_auth():
+                return
             self._send_json(200, {
                 "object": "list",
                 "data": [{"id": MODEL_ID, "object": "model",
@@ -65,6 +95,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path != "/v1/responses":
             self._send_json(*_err("unknown endpoint", "not_found", 404))
+            return
+        if not self._require_auth():
             return
         try:
             length = int(self.headers.get("Content-Length", 0))
@@ -177,6 +209,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    if not API_TOKEN:
+        raise SystemExit("no API token: set AGENT_API_TOKEN or write it to .token in " + BASE)
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print("agent-api (responses format) listening on 127.0.0.1:%d" % PORT, flush=True)
     server.serve_forever()
