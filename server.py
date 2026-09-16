@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""OpenAI Responses-API-compatible shim backed by muse agent workers.
+"""OpenAI-compatible shim backed by muse agent workers.
+
+Endpoints:
+  POST /v1/responses        (OpenAI Responses API)
+  POST /v1/chat/completions (OpenAI Chat Completions API — what CLIProxyAPI's
+                             openai-compatibility channel speaks to upstreams;
+                             translated to/from the Responses shape internally)
+  GET  /v1/models
+  GET  /health
 
 Flow:
   POST /v1/responses -> request JSON written to queue/{id}.json
@@ -93,9 +101,6 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?")[0]
-        if path != "/v1/responses":
-            self._send_json(*_err("unknown endpoint", "not_found", 404))
-            return
         if not self._require_auth():
             return
         try:
@@ -107,33 +112,190 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self._send_json(*_err("request body is not valid JSON", "invalid_request", 400))
             return
-        if "input" not in req:
-            self._send_json(*_err("missing required field: input", "invalid_request", 400))
-            return
+        if path == "/v1/responses":
+            self._handle_responses(req)
+        elif path == "/v1/chat/completions":
+            self._handle_chat_completions(req)
+        else:
+            self._send_json(*_err("unknown endpoint", "not_found", 404))
 
+    # ---- shared dispatch: enqueue one worker turn, long-poll the response ----
+    def _dispatch(self, req):
+        """Returns (response_obj, None) or (None, (status, error_obj))."""
         rid = "resp_" + uuid.uuid4().hex[:24]
         req["_request_id"] = rid
-        with open(os.path.join(QUEUE, rid + ".json"), "w") as f:
-            json.dump(req, f)
-
+        try:
+            with open(os.path.join(QUEUE, rid + ".json"), "w") as f:
+                json.dump(req, f)
+        except OSError:
+            return None, _err("could not enqueue request", "server_error", 500)
         rpath = os.path.join(RESP, rid + ".json")
         deadline = time.time() + TIMEOUT
         while time.time() < deadline:
             if os.path.exists(rpath):
                 try:
                     with open(rpath) as f:
-                        resp = json.load(f)
+                        return json.load(f), None
                 except (json.JSONDecodeError, OSError):
                     time.sleep(0.5)
                     continue
-                if req.get("stream"):
-                    self._send_sse(resp)
-                else:
-                    self._send_json(200, resp)
-                return
             time.sleep(0.5)
+        return None, _err("worker did not respond in time", "timeout", 504)
 
-        self._send_json(*_err("worker did not respond in time", "timeout", 504))
+    def _handle_responses(self, req):
+        if "input" not in req:
+            self._send_json(*_err("missing required field: input", "invalid_request", 400))
+            return
+        resp, err = self._dispatch(req)
+        if err:
+            self._send_json(*err)
+            return
+        if req.get("stream"):
+            self._send_sse(resp)
+        else:
+            self._send_json(200, resp)
+
+    # ---- Chat Completions API (what CLIProxyAPI openai-compatibility speaks) ----
+    @staticmethod
+    def _cc_text(content):
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(p.get("text", "") for p in content
+                            if isinstance(p, dict) and p.get("type") == "text")
+        return ""
+
+    def _handle_chat_completions(self, req):
+        messages = req.get("messages")
+        if not isinstance(messages, list) or not messages:
+            self._send_json(*_err("missing required field: messages", "invalid_request", 400))
+            return
+        instructions, input_items = [], []
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            if role == "system":
+                instructions.append(self._cc_text(m.get("content")))
+            elif role in ("user", "assistant"):
+                input_items.append({"role": role,
+                                    "content": self._cc_text(m.get("content"))})
+            elif role == "tool":
+                input_items.append({"type": "function_call_output",
+                                    "call_id": m.get("tool_call_id", ""),
+                                    "output": self._cc_text(m.get("content"))})
+        tools = []
+        for t in req.get("tools") or []:
+            fn = (t or {}).get("function", {}) if isinstance(t, dict) else {}
+            tools.append({"type": "function", "name": fn.get("name", ""),
+                          "description": fn.get("description", ""),
+                          "parameters": fn.get("parameters", {})})
+        tc = req.get("tool_choice", "auto")
+        if isinstance(tc, dict) and tc.get("type") == "function":
+            tool_choice = {"type": "function",
+                           "name": (tc.get("function") or {}).get("name", "")}
+        elif tc in ("auto", "none", "required"):
+            tool_choice = tc
+        else:
+            tool_choice = "auto"
+        internal = {
+            "input": input_items,
+            "instructions": "\n\n".join(instructions) or None,
+            "tools": tools or None,
+            "tool_choice": tool_choice,
+            "max_output_tokens": req.get("max_tokens"),
+            "temperature": req.get("temperature"),
+            "top_p": req.get("top_p"),
+            "model": req.get("model", MODEL_ID),
+        }
+        internal = {k: v for k, v in internal.items() if v is not None}
+        resp, err = self._dispatch(internal)
+        if err:
+            self._send_json(*err)
+            return
+        if req.get("stream"):
+            self._send_cc_sse(resp, req.get("model", MODEL_ID))
+        else:
+            self._send_json(200, self._cc_response(resp, req.get("model", MODEL_ID)))
+
+    @staticmethod
+    def _cc_tool_calls(resp):
+        calls = []
+        for item in resp.get("output", []):
+            if item.get("type") == "function_call":
+                args = item.get("arguments", "")
+                if not isinstance(args, str):
+                    args = json.dumps(args)
+                calls.append({"id": item.get("call_id") or item.get("id", ""),
+                              "type": "function",
+                              "function": {"name": item.get("name", ""),
+                                           "arguments": args}})
+        return calls
+
+    @staticmethod
+    def _cc_text_out(resp):
+        parts = []
+        for item in resp.get("output", []):
+            if item.get("type") == "message":
+                for c in item.get("content", []):
+                    if c.get("type") == "output_text":
+                        parts.append(c.get("text", ""))
+        return "".join(parts)
+
+    def _cc_response(self, resp, model):
+        text = self._cc_text_out(resp)
+        calls = self._cc_tool_calls(resp)
+        message = {"role": "assistant", "content": text or None}
+        if calls:
+            message["tool_calls"] = calls
+        if not text and not calls:
+            message["content"] = ""
+        return {
+            "id": "chatcmpl-" + uuid.uuid4().hex[:24],
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "message": message,
+                "finish_reason": "tool_calls" if calls else "stop",
+            }],
+            "usage": resp.get("usage") or {},
+        }
+
+    def _send_cc_sse(self, resp, model):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        cid = "chatcmpl-" + uuid.uuid4().hex[:24]
+        created = int(time.time())
+
+        def chunk(delta, finish=None):
+            return ("data: %s\n\n" % json.dumps({
+                "id": cid, "object": "chat.completion.chunk",
+                "created": created, "model": model,
+                "choices": [{"index": 0, "delta": delta,
+                             "finish_reason": finish}],
+            })).encode()
+
+        w = self.wfile.write
+        w(chunk({"role": "assistant"}))
+        text = self._cc_text_out(resp)
+        for j in range(0, len(text), 60):
+            w(chunk({"content": text[j:j + 60]}))
+        for i, tc in enumerate(self._cc_tool_calls(resp)):
+            w(chunk({"tool_calls": [{
+                "index": i, "id": tc["id"], "type": "function",
+                "function": {"name": tc["function"]["name"], "arguments": ""}}]}))
+            args = tc["function"]["arguments"]
+            for j in range(0, len(args), 60):
+                w(chunk({"tool_calls": [{
+                    "index": i,
+                    "function": {"arguments": args[j:j + 60]}}]}))
+        w(chunk({}, "tool_calls" if self._cc_tool_calls(resp) else "stop"))
+        w(b"data: [DONE]\n\n")
 
     # ---- SSE (Responses API event names, chunked server-side) ----
     def _send_sse(self, resp):
