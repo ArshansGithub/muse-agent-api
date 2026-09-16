@@ -53,9 +53,16 @@ object:
      "call_id": "call_1", "name": "tool_name", "arguments": "{\"a\": 1}"}
   ],
   "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
-  "error": null
+  "error": null,
+  "reasoning": "..."
 }
 ```
+
+- `reasoning`: 2-6 sentences of your genuine step-by-step deliberation for THIS
+turn — the thinking that led to the output, not a summary of it. Write it as
+thinking, in first person, including alternatives you considered and discarded.
+This is shown to the user as your thinking trace, so keep it honest and
+concise. For a truly trivial turn (exact-string echo, etc.) use "".
 
 - `status`: `"completed"`; `"incomplete"` if cut by `max_output_tokens`;
   `"failed"` with an `error` object if the request cannot be fulfilled.
