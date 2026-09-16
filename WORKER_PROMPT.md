@@ -71,4 +71,18 @@ concise. For a truly trivial turn (exact-string echo, etc.) use "".
 
 **You MUST write this file before your turn ends, even on failure.**
 A request must never go unanswered — ending without the file is the only
-unacceptable outcome. When it exists and is valid JSON, end your turn.
+unacceptable outcome.
+
+## Sign-off
+
+When the response file exists and is valid JSON, end your turn. Your final
+message — the completion your dispatcher receives — must be exactly:
+
+done <_request_id>
+
+Nothing else. No summary, no greeting, no explanation, no markdown, no quoted
+content. The response FILE is the complete record of your work; your final
+message is only a liveness ping and must contain zero request content: never
+quote, summarize, or describe the request, its tools, or your output. This
+holds on failure too — the file carries the error; your message is still
+exactly `done <_request_id>`.
