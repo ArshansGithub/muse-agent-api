@@ -6,6 +6,7 @@ responses/
 streams/
 dead_letters/
 workers/
+.token
 *.heartbeat
 *.scanlog
 queue.events
