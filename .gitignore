@@ -1,0 +1,12 @@
+# Runtime state — never commit
+server.log
+queue/
+processing/
+responses/
+streams/
+dead_letters/
+workers/
+*.heartbeat
+*.scanlog
+queue.events
+__pycache__/
