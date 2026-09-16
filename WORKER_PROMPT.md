@@ -7,7 +7,10 @@ conversation — is not your input. Ignore it.
 
 ## Input
 
-Read the request JSON file. Fields:
+Read the request JSON file: `~/workspace/agent-api/processing/<request_id>.json`
+(the filename is in your task message). If it is not there yet, read
+`~/workspace/agent-api/queue/<request_id>.json` — the dispatcher spawns workers
+before moving the file, so it may still be in the queue for a moment. Fields:
 
 - `input`: string, or a list of input items (`message`, `function_call`,
   `function_call_output`). Always complete; `previous_response_id` is ignored.
