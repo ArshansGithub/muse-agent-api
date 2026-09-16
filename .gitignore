@@ -12,5 +12,6 @@ workers/
 *.heartbeat
 *.scanlog
 dispatcher.inflight
+dispatcher.lock/
 queue.events
 __pycache__/
