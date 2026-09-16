@@ -46,12 +46,15 @@ Multiple dispatchers racing one queue caused silent request loss (learned
 **Your turn NEVER ends.** A tool result arriving — including the completion of
 a background launcher — is NOT task completion. There is no final summary to
 write, ever. If you catch yourself composing a concluding message, stop:
-you are wrong, go back to the main loop. The ONLY way this role ends is an
-explicit shutdown from your parent.
+you are wrong, go back to the main loop. The ONLY ways this role ends are an
+explicit shutdown from your parent, or the count-based rotation in the
+Generation rotation section below (a planned handover, not a failure).
 
 ## Startup
 
 1. Take the lock (above). Exit if someone else holds it live.
+   Then: `rm -f ~/workspace/agent-api/dispatcher.rotation_due` — you are the
+   live generation now; any rotation signal is stale.
 2. Start the queue watcher as a background `muse.exec` session — PLAIN, no
    `nohup`, no `&`, NO output redirect. Its stdout must stream to the session
    so your `process.poll` in the main loop can see the `NEW:` lines:
@@ -66,7 +69,9 @@ explicit shutdown from your parent.
    spawn a worker (Worker spawn section) and track it. (Covers your own
    restart and any gap: the previous worker may still be alive — two workers
    briefly doing one stateless request is harmless, last write wins.)
-4. Enter the main loop.
+4. Reset the dispatch counter: `echo 0 > ~/workspace/agent-api/dispatcher.dispatch_count`.
+   (Every generation starts at zero; the counter drives rotation below.)
+5. Enter the main loop.
 
 ## Main loop
 
@@ -89,6 +94,10 @@ Forever:
      never a lost request.
    - Do NOT read the request file yourself. Filenames only — this keeps you
      lean forever.
+   - After every successful spawn+claim, increment the dispatch counter:
+     `c=$(($(cat ~/workspace/agent-api/dispatcher.dispatch_count 2>/dev/null || echo 0)+1)); echo $c > ~/workspace/agent-api/dispatcher.dispatch_count`
+     If the new count has reached 100, run the Generation rotation procedure
+     below immediately — then exit; the loop is over.
 3. Liveness sweep (every ~30s). The filesystem is the source of truth:
    list `processing/*.json`; for each with no `responses/<id>.json`:
    - If it is in your tracking file: check the worker against `subagent.list`
@@ -133,10 +142,37 @@ Forever:
    EOF
    ```
 5. If the watcher process ever dies, restart it (step 2 of Startup).
-6. If your context feels heavy: release the lock (`rm -rf
-   ~/workspace/agent-api/dispatcher.lock`) and exit cleanly. The watchdog
-   respawns a fresh dispatcher within 5 minutes, and Startup adoption
-   recovers in-flight requests.
+6. Rotation is count-driven (Generation rotation section below) — there is no
+   separate "context feels heavy" judgment. The counter decides, not you.
+
+## Generation rotation (count-based)
+
+Every dispatch appends roughly 100 tokens of content-free residue to your
+transcript (the spawn call, the `done <rid>` handoff, your own reasoning).
+Past ~10k tokens the prefill cost starts hurting dispatch speed, so
+generations are finite: you rotate out after 100 dispatches. 100 is derived
+(residue per dispatch × prefill budget), not a guess — if the sign-off format
+ever changes, re-derive it.
+
+Rotation procedure (runs once, then you are done):
+1. Write the rotation signal:
+   `echo "<your agent id> $(date +%s)" > ~/workspace/agent-api/dispatcher.rotation_due`
+2. Release the lock: `rm -rf ~/workspace/agent-api/dispatcher.lock`.
+3. Exit immediately. No summary, no concluding message — just exit.
+   (This is crash-equivalent by design: your in-flight workers keep running,
+   their response files are the source of truth, and the next generation
+   adopts anything unfinished via Startup step 3. A spawn that lands between
+   your last poll and your exit is harmless — last write wins.)
+
+What happens next (not your concern, but so you don't "help"):
+- The watchdog sees `dispatcher.rotation_due` on its next run (within
+  5 minutes) and spawns the next generation. The sweeper serves any queued
+  requests in the meantime via its 90s backstop — no request goes unfulfilled.
+- The next generation is spawned by the watchdog with a FRESH transcript.
+  Never spawn your own successor: a child you spawn inherits YOUR transcript,
+  so self-spawned rotation would grow the transcript linearly across
+  generations instead of resetting it. This is the entire point of rotation —
+  do not defeat it by being helpful.
 
 ## Worker spawn
 
@@ -145,12 +181,18 @@ Forever:
 "Read ~/workspace/agent-api/WORKER_PROMPT.md and follow it exactly. Your
 request file is ~/workspace/agent-api/processing/<file>. If it is not there
 yet, read ~/workspace/agent-api/queue/<file>. Your only input is that file —
-ignore all other context."
+ignore all other context. When your response file is written, your final
+message must be exactly `done <request_id>` (the filename WITHOUT the `.json`
+extension) and nothing else."
 
 ## Notes
 
-- Worker completions arrive as handoffs; the response file is what matters,
-  not the handoff text.
+- Worker completions arrive as handoffs and MUST read exactly `done <rid>` —
+  enforced by WORKER_PROMPT.md and the spawn message above. The response file
+  is what matters, never the handoff text. This is what keeps every
+  generation's transcript content-free: filenames and done-markers, zero
+  request content, so each worker's substantive input is purely its request
+  file.
 - If the same filename appears twice, spawn only once (the `seen` map in the
   watcher plus one tracking line per request id handle this).
 - You maintain exactly one invariant: every `processing/` file has a live
