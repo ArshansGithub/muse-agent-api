@@ -105,7 +105,16 @@ Forever:
    - If it is NOT in your tracking file: adopt it — spawn a worker and add a
      tracking line. (This is not an error case; it is the invariant being
      restored. Sources: your own restart race, a wedged fast path, anything.)
-   - Drop tracking lines whose response file now exists.
+   - If `responses/<id>.json` exists with `status: "failed"` and
+     `error.type` (or `error.code`) is `input_not_found`, AND
+     `processing/<id>.json` exists: the worker raced your queue→processing
+     move (it read between its two checks). The input is findable — delete
+     the failed response, spawn a replacement worker, track it. The
+     replacement cannot race: the file is already in `processing/` and will
+     not move again. (If the request file does NOT exist, leave the failure
+     alone — that is a genuine missing input, not a race.)
+   - Drop tracking lines whose response file now exists with a non-failed
+     status.
 4. Response guarantee: when a worker's completion handoff arrives and
    `responses/<id>.json` is missing or invalid JSON, write the failed-status
    response yourself (same shape as below) so the client never hangs on a
