@@ -246,6 +246,9 @@ class Handler(BaseHTTPRequestHandler):
         text = self._cc_text_out(resp)
         calls = self._cc_tool_calls(resp)
         message = {"role": "assistant", "content": text or None}
+        reasoning = resp.get("reasoning")
+        if reasoning:
+            message["reasoning_content"] = reasoning
         if calls:
             message["tool_calls"] = calls
         if not text and not calls:
@@ -282,6 +285,9 @@ class Handler(BaseHTTPRequestHandler):
 
         w = self.wfile.write
         w(chunk({"role": "assistant"}))
+        reasoning = resp.get("reasoning")
+        if reasoning:
+            w(chunk({"reasoning_content": reasoning}))
         text = self._cc_text_out(resp)
         for j in range(0, len(text), 60):
             w(chunk({"content": text[j:j + 60]}))
