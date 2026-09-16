@@ -1,5 +1,7 @@
 # Runtime state — never commit
 server.log
+server.pid
+tunnel.log
 queue/
 processing/
 responses/
@@ -9,5 +11,6 @@ workers/
 .token
 *.heartbeat
 *.scanlog
+dispatcher.inflight
 queue.events
 __pycache__/
