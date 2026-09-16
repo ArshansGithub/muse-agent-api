@@ -70,6 +70,7 @@ Two scheduled jobs keep the bridge alive (registered in the Muse scheduler, not 
 | `status.sh`: dispatcher STALE | Dispatcher agent exited or wedged | Watchdog respawns within 5 min; or ask the assistant to respawn it from `DISPATCHER.md` |
 | Requests hang, `processing/` grows | Worker died silently | Dispatcher liveness sweep respawns it within ~30s (it tracks every worker it spawned) |
 | File sits in `processing/` with no worker | Impossible by construction: the dispatcher spawns the worker *before* moving the file, so `processing/` ⇒ a worker was spawned | If you ever actually see this, the dispatcher logic has a bug — do not patch around it, fix the ordering |
+| Multiple dispatchers alive at once | Watchdog respawned while the old one was still alive; nothing enforced singleton | `dispatcher.lock/` + scanlog-freshness election in DISPATCHER.md: a new dispatcher exits immediately if the lock is held with a fresh scanlog (learned 2026-09-16 — three dispatchers raced one queue) |
 | Duplicate responses | A file was processed twice after reaping | Harmless: last write wins on `responses/<id>.json` |
 | `pkill` killed your own shell | `pkill -f` matched your command string | Always use a self-excluding pattern: `pkill -f "[a]gent-api/server.py"` |
 
