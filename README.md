@@ -79,9 +79,17 @@ Two scheduled jobs keep the bridge alive (registered in the Muse scheduler, not 
 - **The queue watcher must stream.** Its stdout has to reach the dispatcher's `process.poll` — no `nohup`, no output redirect, or the dispatcher goes blind.
 - **Context isolation is prompt-enforced.** The dispatcher only sees filenames; workers are instructed to treat the request file as their sole input. This is architectural/logical isolation, not a platform guarantee — don't claim more.
 
-## Known gaps / roadmap
+## Authentication
 
-- **No authentication.** Do NOT expose publicly (tunnel, etc.) without adding a bearer token first.
+All `/v1/*` endpoints require `Authorization: Bearer <token>`. The token is
+read from the `AGENT_API_TOKEN` env var, falling back to the `.token` file in
+the project root (gitignored, `chmod 600`). The server refuses to start with
+no token configured. `/health` stays unauthenticated for local monitoring.
+
+```bash
+curl -s http://127.0.0.1:8787/v1/models \
+  -H "Authorization: Bearer $(cat .token)"
+```
 - `function_call` / `function_call_output` round-trip not yet tested end-to-end.
 - `stream: true` emits valid SSE but chunks a completed response — not live token streaming.
 - No tunnel configured yet (needed for remote Claude Code to reach `127.0.0.1:8787`).
